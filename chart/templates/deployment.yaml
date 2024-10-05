@@ -17,6 +17,17 @@ spec:
         - name: {{ .Values.image.pullSecrets }}
       containers:
       - name: node-drainer
+        env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: CHECK_INTERVAL
+            value: "{{ .Values.settings.checkInterval }}"
+          - name: THRESHOLD_USAGE
+            value: "{{ .Values.settings.thresholdUsage }}"
+          - name: THRESHOLD_TIME
+            value: "{{ .Values.settings.thresholdTime }}"
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         resources:
           limits:
