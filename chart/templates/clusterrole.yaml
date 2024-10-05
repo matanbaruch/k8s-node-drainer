@@ -3,10 +3,10 @@ kind: ClusterRole
 metadata:
   name: node-drainer-role
 rules:
-- apiGroups: [""]
-  resources: ["nodes"]
-  verbs: ["get", "list", "patch"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["nodes"]
-  verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "events"]
+    verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
 
