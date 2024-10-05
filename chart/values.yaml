@@ -1,9 +1,10 @@
 replicaCount: 1
 
 image:
-  repository: matanbaruch/k8s-node-drainer
+  repository: ghcr.io/matanbaruch/k8s-node-drainer
   tag: latest
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
+  pullSecrets: ghcr-secret
 
 resources:
   limits:

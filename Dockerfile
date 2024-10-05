@@ -1,24 +1,20 @@
-# Start from Golang 1.22 base image
+# Dockerfile
 FROM golang:1.22 as builder
 
 WORKDIR /app
 
-# Copy the Go modules definition and download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the source code
 COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o node-drainer
 
-# Build the application
-RUN go build -o /node-drainer main.go
+FROM alpine:latest
 
-# Use a minimal base image
-FROM gcr.io/distroless/base
+RUN apk --no-cache add ca-certificates
 
-# Copy the compiled Go binary from the builder stage
-COPY --from=builder /node-drainer /node-drainer
+WORKDIR /root/
 
-# Set the entrypoint
-ENTRYPOINT ["/node-drainer"]
+COPY --from=builder /app/node-drainer .
 
+CMD ["./node-drainer"]
