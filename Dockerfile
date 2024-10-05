@@ -1,17 +1,24 @@
-# Build stage
-FROM golang:1.22-alpine AS builder
+# Start from Golang 1.22 base image
+FROM golang:1.22 as builder
 
 WORKDIR /app
+
+# Copy the Go modules definition and download dependencies
 COPY go.mod go.sum ./
 RUN go mod download
+
+# Copy the source code
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o node-drainer main.go
 
-# Run stage
-FROM alpine:latest
-WORKDIR /root/
+# Build the application
+RUN go build -o /node-drainer main.go
 
-COPY --from=builder /app/node-drainer .
+# Use a minimal base image
+FROM gcr.io/distroless/base
 
-CMD ["./node-drainer"]
+# Copy the compiled Go binary from the builder stage
+COPY --from=builder /node-drainer /node-drainer
+
+# Set the entrypoint
+ENTRYPOINT ["/node-drainer"]
 
