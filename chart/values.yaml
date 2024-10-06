@@ -4,7 +4,6 @@ image:
   repository: ghcr.io/matanbaruch/k8s-node-drainer
   tag: latest
   pullPolicy: Always
-  pullSecrets: ghcr-secret
 
 settings:
   checkInterval: 10s
