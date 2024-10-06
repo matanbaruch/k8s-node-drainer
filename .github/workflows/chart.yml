@@ -6,6 +6,7 @@ on:
       - main  # Change this to your desired branch if necessary
     paths:
       - 'chart/**'  # Trigger the workflow when changes are made in the 'chart/' directory
+      - '.github/workflows/chart.yml'
 
 jobs:
   publish:
