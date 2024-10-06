@@ -66,16 +66,17 @@ func init() {
 	// Initialize logger
 	log = logrus.New()
 	log.SetFormatter(&logrus.JSONFormatter{
-		TimestampFormat: time.RFC3339Nano,
+		// Remove the TimestampFormat field
 		FieldMap: logrus.FieldMap{
-			logrus.FieldKeyTime: "timestamp",
+			logrus.FieldKeyTime: "", // Set to empty string to exclude the timestamp
 		},
 	})
 	log.SetOutput(os.Stdout)
 
-	// Enable timestamp logging
-	log.SetReportCaller(true)
+	// Disable timestamp logging
+	log.SetReportCaller(false)
 
+	// Rest of the init function remains the same
 	namespace = getEnv("POD_NAMESPACE", "default")
 	checkInterval = getDurationEnv("CHECK_INTERVAL", 1*time.Minute)
 	thresholdUtilization = getFloatEnv("THRESHOLD_UTILIZATION", 95.0)
