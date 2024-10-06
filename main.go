@@ -21,6 +21,7 @@ var (
 	thresholdUsage float64
 	thresholdTime  time.Duration
 	namespace      string
+	dryRun         bool
 
 	highCPUNodes      = make(map[string]time.Time)
 	highCPUNodesMutex sync.Mutex
@@ -38,12 +39,14 @@ func init() {
 	checkInterval = getDurationEnv("CHECK_INTERVAL", 1*time.Minute)
 	thresholdUsage = getFloatEnv("THRESHOLD_USAGE", 95.0)
 	thresholdTime = getDurationEnv("THRESHOLD_TIME", 10*time.Minute)
+	dryRun = getBoolEnv("DRY_RUN", false)
 
 	log.WithFields(logrus.Fields{
 		"namespace":       namespace,
 		"checkInterval":   checkInterval,
 		"thresholdUsage":  thresholdUsage,
 		"thresholdTime":   thresholdTime,
+		"dryRun":          dryRun,
 	}).Info("Configuration loaded")
 }
 
@@ -94,12 +97,16 @@ func main() {
 
 			if usage > thresholdUsage {
 				if shouldDrainAndCordon(nodeName) {
-					if err := drainAndCordonNode(clientset, nodeName); err != nil {
-						log.WithError(err).WithField("node", nodeName).Error("Error draining and cordoning node")
+					if dryRun {
+						log.WithField("node", nodeName).Info("DRY RUN: Node would be drained and cordoned")
 					} else {
-						log.WithField("node", nodeName).Info("Node has been drained and cordoned")
-						removeHighCPUNode(nodeName)
-						createNodeDrainedEvent(clientset, nodeName, highCPUDuration)
+						if err := drainAndCordonNode(clientset, nodeName); err != nil {
+							log.WithError(err).WithField("node", nodeName).Error("Error draining and cordoning node")
+						} else {
+							log.WithField("node", nodeName).Info("Node has been drained and cordoned")
+							removeHighCPUNode(nodeName)
+							createNodeDrainedEvent(clientset, nodeName, highCPUDuration)
+						}
 					}
 				} else {
 					createHighCPUEvent(clientset, nodeName, highCPUDuration)
@@ -147,6 +154,22 @@ func getDurationEnv(key string, fallback time.Duration) time.Duration {
 			"key":      key,
 			"fallback": fallback,
 		}).Error("Error parsing duration environment variable")
+		return fallback
+	}
+	return value
+}
+
+func getBoolEnv(key string, fallback bool) bool {
+	strValue := getEnv(key, "")
+	if strValue == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(strValue)
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing boolean environment variable")
 		return fallback
 	}
 	return value
@@ -235,6 +258,14 @@ func drainAndCordonNode(clientset *kubernetes.Clientset, nodeName string) error 
 }
 
 func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration) {
+	if dryRun {
+		log.WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration,
+		}).Info("DRY RUN: Would create high CPU event")
+		return
+	}
+
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "high-cpu-usage-",
@@ -259,6 +290,14 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 }
 
 func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration) {
+	if dryRun {
+		log.WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration,
+		}).Info("DRY RUN: Would create node drained event")
+		return
+	}
+
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "node-drained-",
