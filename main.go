@@ -65,34 +65,26 @@ var (
 	)
 )
 
-// Function to format the labels as "key": "value"
-func formatLabels(labels string) map[string]string {
-	labelMap := make(map[string]string)
-	labelPairs := strings.Split(labels, ",")
-	for _, pair := range labelPairs {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			labelMap[key] = value
-		}
+// Function to format the labels as "key=value,key=value"
+func formatLabels(labels map[string]string) string {
+	var labelPairs []string
+	for key, value := range labels {
+		labelPairs = append(labelPairs, fmt.Sprintf("%s=%s", key, value))
 	}
-	return labelMap
+	return strings.Join(labelPairs, ",")
 }
 
 func init() {
 	// Initialize logger
 	log = logrus.New()
 	log.SetFormatter(&logrus.JSONFormatter{
-		// Disable timestamp
 		DisableTimestamp: true,
 		FieldMap: logrus.FieldMap{
-			logrus.FieldKeyMsg: "message", // Change msg field to message
+			logrus.FieldKeyMsg: "message",
 		},
 	})
 	log.SetOutput(os.Stdout)
 
-	// Rest of the init function remains the same
 	namespace = getEnv("POD_NAMESPACE", "default")
 	checkInterval = getDurationEnv("CHECK_INTERVAL", 1*time.Minute)
 	thresholdUtilization = getFloatEnv("THRESHOLD_UTILIZATION", 95.0)
@@ -156,12 +148,12 @@ func main() {
 
 		for _, node := range nodes.Items {
 			nodeName := node.Name
-			nodeLabels := getNodeLabelsString(node.Labels)
+			nodeLabels := formatLabels(node.Labels)
 
 			if node.Spec.Unschedulable {
 				log.WithFields(logrus.Fields{
 					"nodeName": nodeName,
-					"labels":   formatLabels(nodeLabels),
+					"labels":   nodeLabels,
 				}).Info("Node is already cordoned, skipping")
 				continue
 			}
@@ -170,7 +162,7 @@ func main() {
 			if err != nil {
 				log.WithError(err).WithFields(logrus.Fields{
 					"nodeName": nodeName,
-					"labels":   formatLabels(nodeLabels),
+					"labels":   nodeLabels,
 				}).Error("Error getting CPU utilization")
 				continue
 			}
@@ -194,27 +186,27 @@ func main() {
 					if dryRun {
 						log.WithFields(logrus.Fields{
 							"nodeName": nodeName,
-							"labels":   formatLabels(nodeLabels),
+							"labels":   nodeLabels,
 						}).Info("DRY RUN: Node would be drained and cordoned")
 					} else {
 						if err := drainAndCordonNode(clientset, nodeName); err != nil {
 							log.WithError(err).WithFields(logrus.Fields{
 								"nodeName": nodeName,
-								"labels":   formatLabels(nodeLabels),
+								"labels":   nodeLabels,
 							}).Error("Error draining and cordoning node")
 						} else {
 							log.WithFields(logrus.Fields{
 								"nodeName": nodeName,
-								"labels":   formatLabels(nodeLabels),
+								"labels":   nodeLabels,
 							}).Info("Node has been drained and cordoned")
 							removeHighCPUNode(nodeName)
-							createNodeDrainedEvent(clientset, nodeName, highCPUDuration, nodeLabels)
+							createNodeDrainedEvent(clientset, nodeName, highCPUDuration, node.Labels)
 							// Update Prometheus metric
 							nodesDrainedTotal.WithLabelValues(nodeName, nodeLabels).Inc()
 						}
 					}
 				} else {
-					createHighCPUEvent(clientset, nodeName, highCPUDuration, nodeLabels)
+					createHighCPUEvent(clientset, nodeName, highCPUDuration, node.Labels)
 					// Update Prometheus metric
 					highCPUEventsTotal.WithLabelValues(nodeName, nodeLabels).Inc()
 				}
@@ -395,11 +387,11 @@ func getNodeLabelsString(labels map[string]string) string {
 	return result
 }
 
-func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration, nodeLabels string) {
+func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration, nodeLabels map[string]string) {
 	if dryRun {
 		log.WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Info("DRY RUN: Would create high CPU event")
 		return
@@ -415,7 +407,7 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 			Name: nodeName,
 		},
 		Reason:  "NodeHighCPUUtilization",
-		Message: fmt.Sprintf("Node CPU utilization is above threshold for %s. Node labels: %s", duration.String(), nodeLabels),
+		Message: fmt.Sprintf("Node CPU utilization is above threshold for %s. Node labels: %s", duration.String(), formatLabels(nodeLabels)),
 		Type:    "Warning",
 	}
 
@@ -423,23 +415,23 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Error("Error creating high CPU event")
 	} else {
 		log.WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Info("Successfully created high CPU event")
 	}
 }
 
-func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration, nodeLabels string) {
+func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration, nodeLabels map[string]string) {
 	if dryRun {
 		log.WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Info("DRY RUN: Would create node drained event")
 		return
@@ -455,7 +447,7 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 			Name: nodeName,
 		},
 		Reason:  "NodeDrained",
-		Message: fmt.Sprintf("Node has been drained and cordoned due to high CPU utilization for %s. Node labels: %s", duration.String(), nodeLabels),
+		Message: fmt.Sprintf("Node has been drained and cordoned due to high CPU utilization for %s. Node labels: %s", duration.String(), formatLabels(nodeLabels)),
 		Type:    "Warning",
 	}
 
@@ -463,13 +455,13 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Error("Error creating node drained event")
 	} else {
 		log.WithFields(logrus.Fields{
 			"nodeName": nodeName,
-			"labels":   nodeLabels,
+			"labels":   formatLabels(nodeLabels),
 			"duration": duration.String(),
 		}).Info("Successfully created node drained event")
 	}
