@@ -13,8 +13,6 @@ spec:
         app: node-drainer
     spec:
       serviceAccountName: node-drainer-sa
-      imagePullSecrets:
-        - name: {{ .Values.image.pullSecrets }}
       containers:
       - name: node-drainer
         env:
