@@ -9,6 +9,7 @@ settings:
   checkInterval: 10s
   thresholdUsage: "95.0"
   thresholdTime: 2m
+  dryRun: false
 
 resources:
   limits:
