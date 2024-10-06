@@ -32,8 +32,16 @@ var (
 func init() {
 	// Initialize logger
 	log = logrus.New()
-	log.SetFormatter(&logrus.JSONFormatter{})
+	log.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339Nano,
+		FieldMap: logrus.FieldMap{
+			logrus.FieldKeyTime: "timestamp",
+		},
+	})
 	log.SetOutput(os.Stdout)
+
+	// Enable timestamp logging
+	log.SetReportCaller(true)
 
 	namespace = getEnv("POD_NAMESPACE", "default")
 	checkInterval = getDurationEnv("CHECK_INTERVAL", 1*time.Minute)
@@ -120,6 +128,61 @@ func main() {
 	}
 }
 
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+func getFloatEnv(key string, fallback float64) float64 {
+	strValue := getEnv(key, "")
+	if strValue == "" {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(strValue, 64)
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing float environment variable")
+		return fallback
+	}
+	return value
+}
+
+func getDurationEnv(key string, fallback time.Duration) time.Duration {
+	strValue := getEnv(key, "")
+	if strValue == "" {
+		return fallback
+	}
+	value, err := time.ParseDuration(strValue)
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing duration environment variable")
+		return fallback
+	}
+	return value
+}
+
+func getBoolEnv(key string, fallback bool) bool {
+	strValue := getEnv(key, "")
+	if strValue == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(strValue)
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing boolean environment variable")
+		return fallback
+	}
+	return value
+}
+
 func getNodeCPUUtilization(metricsClientset *versioned.Clientset, clientset *kubernetes.Clientset, nodeName string) (float64, error) {
 	nodeMetrics, err := metricsClientset.MetricsV1beta1().NodeMetricses().Get(context.TODO(), nodeName, metav1.GetOptions{})
 	if err != nil {
@@ -138,7 +201,77 @@ func getNodeCPUUtilization(metricsClientset *versioned.Clientset, clientset *kub
 	return utilization, nil
 }
 
-// Other functions remain the same...
+func getHighCPUDuration(nodeName string) time.Duration {
+	highCPUNodesMutex.Lock()
+	defer highCPUNodesMutex.Unlock()
+
+	firstSeen, exists := highCPUNodes[nodeName]
+	if !exists {
+		return 0
+	}
+
+	return time.Since(firstSeen)
+}
+
+func shouldDrainAndCordon(nodeName string) bool {
+	highCPUNodesMutex.Lock()
+	defer highCPUNodesMutex.Unlock()
+
+	firstSeen, exists := highCPUNodes[nodeName]
+	if !exists {
+		highCPUNodes[nodeName] = time.Now()
+		return false
+	}
+
+	return time.Since(firstSeen) >= thresholdTime
+}
+
+func removeHighCPUNode(nodeName string) {
+	highCPUNodesMutex.Lock()
+	defer highCPUNodesMutex.Unlock()
+
+	delete(highCPUNodes, nodeName)
+}
+
+func drainAndCordonNode(clientset *kubernetes.Clientset, nodeName string) error {
+	// Cordon the node
+	node, err := clientset.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	if node.Spec.Unschedulable {
+		log.WithField("node", nodeName).Info("Node is already cordoned")
+		return nil
+	}
+
+	_, err = clientset.CoreV1().Nodes().Patch(context.TODO(), nodeName, types.StrategicMergePatchType,
+		[]byte(`{"spec":{"unschedulable":true}}`), metav1.PatchOptions{})
+	if err != nil {
+		return err
+	}
+
+	// Drain the node
+	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, pod := range pods.Items {
+		err := clientset.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
+		if err != nil {
+			log.WithError(err).WithFields(logrus.Fields{
+				"node":      nodeName,
+				"namespace": pod.Namespace,
+				"pod":       pod.Name,
+			}).Error("Error deleting pod")
+		}
+	}
+
+	return nil
+}
 
 func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, duration time.Duration) {
 	if dryRun {
