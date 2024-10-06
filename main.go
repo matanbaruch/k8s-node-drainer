@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	checkInterval       time.Duration
+	checkInterval        time.Duration
 	thresholdUtilization float64
-	thresholdTime       time.Duration
-	namespace           string
-	dryRun              bool
+	thresholdTime        time.Duration
+	namespace            string
+	dryRun               bool
+	nodeLabelSelector    string
 
 	highCPUNodes      = make(map[string]time.Time)
 	highCPUNodesMutex sync.Mutex
@@ -48,6 +49,7 @@ func init() {
 	thresholdUtilization = getFloatEnv("THRESHOLD_UTILIZATION", 95.0)
 	thresholdTime = getDurationEnv("THRESHOLD_TIME", 10*time.Minute)
 	dryRun = getBoolEnv("DRY_RUN", false)
+	nodeLabelSelector = getEnv("NODE_LABEL_SELECTOR", "")
 
 	log.WithFields(logrus.Fields{
 		"namespace":            namespace,
@@ -55,6 +57,7 @@ func init() {
 		"thresholdUtilization": thresholdUtilization,
 		"thresholdTime":        thresholdTime,
 		"dryRun":               dryRun,
+		"nodeLabelSelector":    nodeLabelSelector,
 	}).Info("Configuration loaded")
 }
 
@@ -75,7 +78,12 @@ func main() {
 	}
 
 	for {
-		nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
+		listOptions := metav1.ListOptions{}
+		if nodeLabelSelector != "" {
+			listOptions.LabelSelector = nodeLabelSelector
+		}
+
+		nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), listOptions)
 		if err != nil {
 			log.WithError(err).Error("Error listing nodes")
 			time.Sleep(checkInterval)
@@ -98,9 +106,9 @@ func main() {
 
 			highCPUDuration := getHighCPUDuration(nodeName)
 			log.WithFields(logrus.Fields{
-				"node":             nodeName,
-				"cpuUtilization":   utilization,
-				"highCPUDuration":  highCPUDuration,
+				"node":            nodeName,
+				"cpuUtilization":  utilization,
+				"highCPUDuration": highCPUDuration,
 			}).Info("Node CPU utilization")
 
 			if utilization > thresholdUtilization {

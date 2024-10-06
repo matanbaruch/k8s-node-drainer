@@ -28,6 +28,8 @@ spec:
             value: "{{ .Values.settings.thresholdTime }}"
           - name: DRY_RUN
             value: "{{ .Values.settings.dryRun }}"
+          - name: NODE_LABEL_SELECTOR
+            value: "{{ .Values.settings.nodeLabelSelector }}"
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         resources:
           limits:
