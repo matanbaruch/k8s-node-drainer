@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -84,9 +85,9 @@ func init() {
 
 	log.WithFields(logrus.Fields{
 		"namespace":            namespace,
-		"checkInterval":        checkInterval,
-		"thresholdUtilization": thresholdUtilization,
-		"thresholdTime":        thresholdTime,
+		"checkInterval":        checkInterval.String(),
+		"thresholdUtilization": fmt.Sprintf("%.2f%%", thresholdUtilization),
+		"thresholdTime":        thresholdTime.String(),
 		"dryRun":               dryRun,
 		"nodeLabelSelector":    nodeLabelSelector,
 	}).Info("Configuration loaded")
@@ -156,8 +157,8 @@ func main() {
 			highCPUDuration := getHighCPUDuration(nodeName)
 			log.WithFields(logrus.Fields{
 				"node":            nodeName,
-				"cpuUtilization":  utilization,
-				"highCPUDuration": highCPUDuration,
+				"cpuUtilization":  fmt.Sprintf("%.2f%%", utilization),
+				"highCPUDuration": highCPUDuration.String(),
 			}).Info("Node CPU utilization")
 
 			// Update Prometheus metric
@@ -323,6 +324,11 @@ func drainAndCordonNode(clientset *kubernetes.Clientset, nodeName string) error 
 		return err
 	}
 
+	log.WithFields(logrus.Fields{
+		"node":     nodeName,
+		"podCount": len(pods.Items),
+	}).Info("Starting to drain node")
+
 	for _, pod := range pods.Items {
 		err := clientset.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
 		if err != nil {
@@ -331,9 +337,16 @@ func drainAndCordonNode(clientset *kubernetes.Clientset, nodeName string) error 
 				"namespace": pod.Namespace,
 				"pod":       pod.Name,
 			}).Error("Error deleting pod")
+		} else {
+			log.WithFields(logrus.Fields{
+				"node":      nodeName,
+				"namespace": pod.Namespace,
+				"pod":       pod.Name,
+			}).Info("Successfully deleted pod")
 		}
 	}
 
+	log.WithField("node", nodeName).Info("Node draining completed")
 	return nil
 }
 
@@ -341,7 +354,7 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 	if dryRun {
 		log.WithFields(logrus.Fields{
 			"node":     nodeName,
-			"duration": duration,
+			"duration": duration.String(),
 		}).Info("DRY RUN: Would create high CPU event")
 		return
 	}
@@ -356,7 +369,7 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 			Name: nodeName,
 		},
 		Reason:  "NodeHighCPUUtilization",
-		Message: "Node CPU utilization is above threshold",
+		Message: fmt.Sprintf("Node CPU utilization is above threshold for %s", duration.String()),
 		Type:    "Warning",
 	}
 
@@ -364,8 +377,13 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
 			"node":     nodeName,
-			"duration": duration,
+			"duration": duration.String(),
 		}).Error("Error creating high CPU event")
+	} else {
+		log.WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration.String(),
+		}).Info("Successfully created high CPU event")
 	}
 }
 
@@ -373,7 +391,7 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 	if dryRun {
 		log.WithFields(logrus.Fields{
 			"node":     nodeName,
-			"duration": duration,
+			"duration": duration.String(),
 		}).Info("DRY RUN: Would create node drained event")
 		return
 	}
@@ -388,7 +406,7 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 			Name: nodeName,
 		},
 		Reason:  "NodeDrained",
-		Message: "Node has been drained and cordoned due to high CPU utilization",
+		Message: fmt.Sprintf("Node has been drained and cordoned due to high CPU utilization for %s", duration.String()),
 		Type:    "Warning",
 	}
 
@@ -396,7 +414,12 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 	if err != nil {
 		log.WithError(err).WithFields(logrus.Fields{
 			"node":     nodeName,
-			"duration": duration,
+			"duration": duration.String(),
 		}).Error("Error creating node drained event")
+	} else {
+		log.WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration.String(),
+		}).Info("Successfully created node drained event")
 	}
 }
