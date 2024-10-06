@@ -66,15 +66,10 @@ func init() {
 	// Initialize logger
 	log = logrus.New()
 	log.SetFormatter(&logrus.JSONFormatter{
-		// Remove the TimestampFormat field
-		FieldMap: logrus.FieldMap{
-			logrus.FieldKeyTime: "", // Set to empty string to exclude the timestamp
-		},
+		// Disable timestamp
+		DisableTimestamp: true,
 	})
 	log.SetOutput(os.Stdout)
-
-	// Disable timestamp logging
-	log.SetReportCaller(false)
 
 	// Rest of the init function remains the same
 	namespace = getEnv("POD_NAMESPACE", "default")
