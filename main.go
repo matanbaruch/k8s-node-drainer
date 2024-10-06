@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,6 +31,34 @@ var (
 	highCPUNodesMutex sync.Mutex
 
 	log *logrus.Logger
+
+	// Prometheus metrics
+	nodeCPUUtilization = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "node_cpu_utilization",
+			Help: "Current CPU utilization of the node",
+		},
+		[]string{"node"},
+	)
+	highCPUNodesDuration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "high_cpu_nodes_duration_seconds",
+			Help: "Duration for which a node has been in high CPU state",
+		},
+		[]string{"node"},
+	)
+	nodesDrainedTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "nodes_drained_total",
+			Help: "Total number of nodes drained due to high CPU",
+		},
+	)
+	highCPUEventsTotal = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "high_cpu_events_total",
+			Help: "Total number of high CPU events created",
+		},
+	)
 )
 
 func init() {
@@ -59,6 +90,12 @@ func init() {
 		"dryRun":               dryRun,
 		"nodeLabelSelector":    nodeLabelSelector,
 	}).Info("Configuration loaded")
+
+	// Register Prometheus metrics
+	prometheus.MustRegister(nodeCPUUtilization)
+	prometheus.MustRegister(highCPUNodesDuration)
+	prometheus.MustRegister(nodesDrainedTotal)
+	prometheus.MustRegister(highCPUEventsTotal)
 }
 
 func main() {
@@ -76,6 +113,15 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Metrics clientset")
 	}
+
+	// Start Prometheus HTTP server
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Info("Starting Prometheus metrics server on :8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			log.WithError(err).Fatal("Failed to start Prometheus metrics server")
+		}
+	}()
 
 	for {
 		listOptions := metav1.ListOptions{}
@@ -104,12 +150,18 @@ func main() {
 				continue
 			}
 
+			// Update Prometheus metric
+			nodeCPUUtilization.WithLabelValues(nodeName).Set(utilization)
+
 			highCPUDuration := getHighCPUDuration(nodeName)
 			log.WithFields(logrus.Fields{
 				"node":            nodeName,
 				"cpuUtilization":  utilization,
 				"highCPUDuration": highCPUDuration,
 			}).Info("Node CPU utilization")
+
+			// Update Prometheus metric
+			highCPUNodesDuration.WithLabelValues(nodeName).Set(highCPUDuration.Seconds())
 
 			if utilization > thresholdUtilization {
 				if shouldDrainAndCordon(nodeName) {
@@ -122,10 +174,14 @@ func main() {
 							log.WithField("node", nodeName).Info("Node has been drained and cordoned")
 							removeHighCPUNode(nodeName)
 							createNodeDrainedEvent(clientset, nodeName, highCPUDuration)
+							// Update Prometheus metric
+							nodesDrainedTotal.Inc()
 						}
 					}
 				} else {
 					createHighCPUEvent(clientset, nodeName, highCPUDuration)
+					// Update Prometheus metric
+					highCPUEventsTotal.Inc()
 				}
 			} else {
 				removeHighCPUNode(nodeName)

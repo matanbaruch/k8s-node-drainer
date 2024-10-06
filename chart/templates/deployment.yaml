@@ -11,6 +11,10 @@ spec:
     metadata:
       labels:
         app: node-drainer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: node-drainer-sa
       containers:
@@ -31,6 +35,15 @@ spec:
           - name: NODE_LABEL_SELECTOR
             value: "{{ .Values.settings.nodeLabelSelector }}"
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        ports:
+          - name: metrics
+            containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: metrics
+          initialDelaySeconds: 5
+          periodSeconds: 10
         resources:
           limits:
             cpu: {{ .Values.resources.limits.cpu }}
