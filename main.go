@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,41 +24,49 @@ var (
 
 	highCPUNodes      = make(map[string]time.Time)
 	highCPUNodesMutex sync.Mutex
+
+	log *logrus.Logger
 )
 
 func init() {
+	// Initialize logger
+	log = logrus.New()
+	log.SetFormatter(&logrus.JSONFormatter{})
+	log.SetOutput(os.Stdout)
+
 	namespace = getEnv("POD_NAMESPACE", "default")
 	checkInterval = getDurationEnv("CHECK_INTERVAL", 1*time.Minute)
 	thresholdUsage = getFloatEnv("THRESHOLD_USAGE", 95.0)
 	thresholdTime = getDurationEnv("THRESHOLD_TIME", 10*time.Minute)
 
-	fmt.Printf("Configuration:\n")
-	fmt.Printf("  Namespace: %s\n", namespace)
-	fmt.Printf("  Check Interval: %v\n", checkInterval)
-	fmt.Printf("  Threshold Usage: %.2f%%\n", thresholdUsage)
-	fmt.Printf("  Threshold Time: %v\n", thresholdTime)
+	log.WithFields(logrus.Fields{
+		"namespace":       namespace,
+		"checkInterval":   checkInterval,
+		"thresholdUsage":  thresholdUsage,
+		"thresholdTime":   thresholdTime,
+	}).Info("Configuration loaded")
 }
 
 func main() {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		panic(err.Error())
+		log.WithError(err).Fatal("Failed to get in-cluster config")
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		panic(err.Error())
+		log.WithError(err).Fatal("Failed to create Kubernetes clientset")
 	}
 
 	metricsClientset, err := versioned.NewForConfig(config)
 	if err != nil {
-		panic(err.Error())
+		log.WithError(err).Fatal("Failed to create Metrics clientset")
 	}
 
 	for {
 		nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 		if err != nil {
-			fmt.Printf("Error listing nodes: %v\n", err)
+			log.WithError(err).Error("Error listing nodes")
 			time.Sleep(checkInterval)
 			continue
 		}
@@ -67,25 +75,29 @@ func main() {
 			nodeName := node.Name
 
 			if node.Spec.Unschedulable {
-				fmt.Printf("Node: %s is already cordoned, skipping\n", nodeName)
+				log.WithField("node", nodeName).Info("Node is already cordoned, skipping")
 				continue
 			}
 
 			usage, err := getNodeCPUUsage(metricsClientset, nodeName)
 			if err != nil {
-				fmt.Printf("Error getting CPU usage for node %s: %v\n", nodeName, err)
+				log.WithError(err).WithField("node", nodeName).Error("Error getting CPU usage")
 				continue
 			}
 
 			highCPUDuration := getHighCPUDuration(nodeName)
-			fmt.Printf("Node: %s, CPU Usage: %.2f%%, High CPU Duration: %s\n", nodeName, usage, highCPUDuration)
+			log.WithFields(logrus.Fields{
+				"node":             nodeName,
+				"cpuUsage":         usage,
+				"highCPUDuration":  highCPUDuration,
+			}).Info("Node CPU usage")
 
 			if usage > thresholdUsage {
 				if shouldDrainAndCordon(nodeName) {
 					if err := drainAndCordonNode(clientset, nodeName); err != nil {
-						fmt.Printf("Error draining and cordoning node %s: %v\n", nodeName, err)
+						log.WithError(err).WithField("node", nodeName).Error("Error draining and cordoning node")
 					} else {
-						fmt.Printf("Node %s has been drained and cordoned\n", nodeName)
+						log.WithField("node", nodeName).Info("Node has been drained and cordoned")
 						removeHighCPUNode(nodeName)
 						createNodeDrainedEvent(clientset, nodeName, highCPUDuration)
 					}
@@ -115,7 +127,10 @@ func getFloatEnv(key string, fallback float64) float64 {
 	}
 	value, err := strconv.ParseFloat(strValue, 64)
 	if err != nil {
-		fmt.Printf("Error parsing %s, using fallback value: %v\n", key, err)
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing float environment variable")
 		return fallback
 	}
 	return value
@@ -128,7 +143,10 @@ func getDurationEnv(key string, fallback time.Duration) time.Duration {
 	}
 	value, err := time.ParseDuration(strValue)
 	if err != nil {
-		fmt.Printf("Error parsing %s, using fallback value: %v\n", key, err)
+		log.WithError(err).WithFields(logrus.Fields{
+			"key":      key,
+			"fallback": fallback,
+		}).Error("Error parsing duration environment variable")
 		return fallback
 	}
 	return value
@@ -180,32 +198,36 @@ func drainAndCordonNode(clientset *kubernetes.Clientset, nodeName string) error 
 	// Cordon the node
 	node, err := clientset.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{})
 	if err != nil {
-		return fmt.Errorf("error getting node: %v", err)
+		return err
 	}
 
 	if node.Spec.Unschedulable {
-		fmt.Printf("Node %s is already cordoned\n", nodeName)
+		log.WithField("node", nodeName).Info("Node is already cordoned")
 		return nil
 	}
 
 	_, err = clientset.CoreV1().Nodes().Patch(context.TODO(), nodeName, types.StrategicMergePatchType,
 		[]byte(`{"spec":{"unschedulable":true}}`), metav1.PatchOptions{})
 	if err != nil {
-		return fmt.Errorf("error cordoning node: %v", err)
+		return err
 	}
 
 	// Drain the node
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
+		FieldSelector: "spec.nodeName=" + nodeName,
 	})
 	if err != nil {
-		return fmt.Errorf("error listing pods on node: %v", err)
+		return err
 	}
 
 	for _, pod := range pods.Items {
 		err := clientset.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
 		if err != nil {
-			fmt.Printf("Error deleting pod %s/%s: %v\n", pod.Namespace, pod.Name, err)
+			log.WithError(err).WithFields(logrus.Fields{
+				"node":      nodeName,
+				"namespace": pod.Namespace,
+				"pod":       pod.Name,
+			}).Error("Error deleting pod")
 		}
 	}
 
@@ -223,13 +245,16 @@ func createHighCPUEvent(clientset *kubernetes.Clientset, nodeName string, durati
 			Name: nodeName,
 		},
 		Reason:  "NodeHighCPUUsage",
-		Message: fmt.Sprintf("Node %s CPU usage is above %.2f%% for %s", nodeName, thresholdUsage, duration.Round(time.Second)),
+		Message: "Node CPU usage is above threshold",
 		Type:    "Warning",
 	}
 
 	_, err := clientset.CoreV1().Events(namespace).Create(context.TODO(), event, metav1.CreateOptions{})
 	if err != nil {
-		fmt.Printf("Error creating high CPU event for node %s: %v\n", nodeName, err)
+		log.WithError(err).WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration,
+		}).Error("Error creating high CPU event")
 	}
 }
 
@@ -244,12 +269,15 @@ func createNodeDrainedEvent(clientset *kubernetes.Clientset, nodeName string, du
 			Name: nodeName,
 		},
 		Reason:  "NodeDrained",
-		Message: fmt.Sprintf("Node %s has been drained and cordoned due to high CPU usage (above %.2f%%) for %s", nodeName, thresholdUsage, duration.Round(time.Second)),
+		Message: "Node has been drained and cordoned due to high CPU usage",
 		Type:    "Warning",
 	}
 
 	_, err := clientset.CoreV1().Events(namespace).Create(context.TODO(), event, metav1.CreateOptions{})
 	if err != nil {
-		fmt.Printf("Error creating node drained event for node %s: %v\n", nodeName, err)
+		log.WithError(err).WithFields(logrus.Fields{
+			"node":     nodeName,
+			"duration": duration,
+		}).Error("Error creating node drained event")
 	}
 }
