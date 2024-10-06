@@ -10,6 +10,7 @@ settings:
   thresholdUsage: "95.0"
   thresholdTime: 2m
   dryRun: false
+  nodeLabelSelector: karpenter.sh/registered=true
 
 resources:
   limits:
