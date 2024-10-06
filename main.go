@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,21 @@ var (
 		[]string{"node", "labels"},
 	)
 )
+
+// Function to format the labels as "key": "value"
+func formatLabels(labels string) map[string]string {
+	labelMap := make(map[string]string)
+	labelPairs := strings.Split(labels, ",")
+	for _, pair := range labelPairs {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			labelMap[key] = value
+		}
+	}
+	return labelMap
+}
 
 func init() {
 	// Initialize logger
@@ -145,7 +161,7 @@ func main() {
 			if node.Spec.Unschedulable {
 				log.WithFields(logrus.Fields{
 					"node":   nodeName,
-					"labels": nodeLabels,
+					"labels": formatLabels(nodeLabels),
 				}).Info("Node is already cordoned, skipping")
 				continue
 			}
@@ -154,7 +170,7 @@ func main() {
 			if err != nil {
 				log.WithError(err).WithFields(logrus.Fields{
 					"node":   nodeName,
-					"labels": nodeLabels,
+					"labels": formatLabels(nodeLabels),
 				}).Error("Error getting CPU utilization")
 				continue
 			}
@@ -178,18 +194,18 @@ func main() {
 					if dryRun {
 						log.WithFields(logrus.Fields{
 							"node":   nodeName,
-							"labels": nodeLabels,
+							"labels": formatLabels(nodeLabels),
 						}).Info("DRY RUN: Node would be drained and cordoned")
 					} else {
 						if err := drainAndCordonNode(clientset, nodeName); err != nil {
 							log.WithError(err).WithFields(logrus.Fields{
 								"node":   nodeName,
-								"labels": nodeLabels,
+								"labels": formatLabels(nodeLabels),
 							}).Error("Error draining and cordoning node")
 						} else {
 							log.WithFields(logrus.Fields{
 								"node":   nodeName,
-								"labels": nodeLabels,
+								"labels": formatLabels(nodeLabels),
 							}).Info("Node has been drained and cordoned")
 							removeHighCPUNode(nodeName)
 							createNodeDrainedEvent(clientset, nodeName, highCPUDuration, nodeLabels)
