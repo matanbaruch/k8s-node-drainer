@@ -70,6 +70,9 @@ func init() {
 	log.SetFormatter(&logrus.JSONFormatter{
 		// Disable timestamp
 		DisableTimestamp: true,
+		FieldMap: logrus.FieldMap{
+			logrus.FieldKeyMsg: "message", // Change msg field to message
+		},
 	})
 	log.SetOutput(os.Stdout)
 
