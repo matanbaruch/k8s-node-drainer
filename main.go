@@ -40,28 +40,28 @@ var (
 			Name: "node_cpu_utilization",
 			Help: "Current CPU utilization of the node",
 		},
-		[]string{"nodeName", "labels"},
+		[]string{"nodeName"},
 	)
 	highCPUNodesDuration = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "high_cpu_nodes_duration_seconds",
 			Help: "Duration for which a node has been in high CPU state",
 		},
-		[]string{"nodeName", "labels"},
+		[]string{"nodeName"},
 	)
 	nodesDrainedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "nodes_drained_total",
 			Help: "Total number of nodes drained due to high CPU",
 		},
-		[]string{"nodeName", "labels"},
+		[]string{"nodeName"},
 	)
 	highCPUEventsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "high_cpu_events_total",
 			Help: "Total number of high CPU events created",
 		},
-		[]string{"nodeName", "labels"},
+		[]string{"nodeName"},
 	)
 )
 
@@ -168,7 +168,7 @@ func main() {
 			}
 
 			// Update Prometheus metric
-			nodeCPUUtilization.WithLabelValues(nodeName, nodeLabels).Set(utilization)
+			nodeCPUUtilization.WithLabelValues(nodeName).Set(utilization)
 
 			highCPUDuration := getHighCPUDuration(nodeName)
 			log.WithFields(logrus.Fields{
@@ -179,7 +179,7 @@ func main() {
 			}).Info("Node CPU utilization")
 
 			// Update Prometheus metric
-			highCPUNodesDuration.WithLabelValues(nodeName, nodeLabels).Set(highCPUDuration.Seconds())
+			highCPUNodesDuration.WithLabelValues(nodeName).Set(highCPUDuration.Seconds())
 
 			if utilization > thresholdUtilization {
 				if shouldDrainAndCordon(nodeName) {
@@ -202,13 +202,13 @@ func main() {
 							removeHighCPUNode(nodeName)
 							createNodeDrainedEvent(clientset, nodeName, highCPUDuration, node.Labels)
 							// Update Prometheus metric
-							nodesDrainedTotal.WithLabelValues(nodeName, nodeLabels).Inc()
+							nodesDrainedTotal.WithLabelValues(nodeName).Inc()
 						}
 					}
 				} else {
 					createHighCPUEvent(clientset, nodeName, highCPUDuration, node.Labels)
 					// Update Prometheus metric
-					highCPUEventsTotal.WithLabelValues(nodeName, nodeLabels).Inc()
+					highCPUEventsTotal.WithLabelValues(nodeName).Inc()
 				}
 			} else {
 				removeHighCPUNode(nodeName)
